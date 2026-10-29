@@ -186,6 +186,19 @@ while (--ac > 0)
 	}
 	log_add (log_Info, "We've loaded the Kernel");
 
+	if (getenv ("P6014_SOLSYS_DUMP") != NULL)
+	{	// solar-system layout dump: run it before the menu, then exit
+		extern void p6014_dump_solar_systems (void);
+		extern STAR_DESC starmap_array[];
+		extern STAR_DESC *star_array;
+		extern const PlanetFrame planet_array[];
+
+		star_array = starmap_array;
+		PlanData = planet_array;
+		p6014_dump_solar_systems ();
+		exit (EXIT_SUCCESS);
+	}
+
 	Logo ();
 	
 	GLOBAL (CurrentActivity) = 0;

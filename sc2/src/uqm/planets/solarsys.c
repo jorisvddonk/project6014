@@ -2698,3 +2698,119 @@ DoIpFlight (SOLARSYS_STATE *pSS)
 			| CHECK_ABORT | CHECK_LOAD))
 			&& GLOBAL_SIS (CrewEnlisted) != (COUNT)~0);
 }
+
+/* Development aid: dump the planet layout every star system generates.
+ *
+ * Runs the same steps as LoadSolarSys() - seedRandomForSolarSys(), one draw
+ * for the sun's rand_seed, then the system's generatePlanets() - for every
+ * star, and restores the RNG between systems. Used to compare this build's
+ * output with the MegaMod campaign port, star by star.
+ *
+ * Triggered by P6014_SOLSYS_DUMP=1 (see starcon.c); the game exits after.
+ */
+void
+p6014_dump_solar_systems (void)
+{
+	COUNT i;
+
+	for (i = 0; i < NUM_SOLAR_SYSTEMS; ++i)
+	{
+		SOLARSYS_STATE state;
+		PLANET_DESC *planet;
+		DWORD old_seed;
+		COUNT j;
+
+		memset (&state, 0, sizeof state);
+		pSolarSysState = &state;
+		CurStarDescPtr = &star_array[i];
+		state.genFuncs = getGenerateFunctions (CurStarDescPtr->Index);
+		if (!state.genFuncs)
+			continue;
+
+		state.SunDesc[0].data_index = STAR_TYPE (CurStarDescPtr->Type);
+		/* the SIS position selects the mineral/life regions */
+		GLOBAL_SIS (log_x) = UNIVERSE_TO_LOGX (CurStarDescPtr->star_pt.x);
+		GLOBAL_SIS (log_y) = UNIVERSE_TO_LOGY (CurStarDescPtr->star_pt.y);
+
+		old_seed = seedRandomForSolarSys ();
+		state.SunDesc[0].rand_seed = TFB_Random ();
+		state.genFuncs->generatePlanets (&state);
+		TFB_SeedRandom (old_seed);
+
+		printf ("p6014solsys: npt=%d star=%d seed=%08x planets=%d",
+				(int) NUMBER_OF_PLANET_TYPES, (int) i,
+				(unsigned) MAKE_DWORD (
+						CurStarDescPtr->star_pt.x - 5000,
+						CurStarDescPtr->star_pt.y - 6000),
+				(int) state.SunDesc[0].NumPlanets);
+		printf ("\n");
+		fflush (stdout);
+		for (j = 0, planet = &state.PlanetDesc[0];
+				j < state.SunDesc[0].NumPlanets; ++j, ++planet)
+			printf (" [%d:%d r%d m%d s%08x]", (int) j,
+					(int) (planet->data_index & ~PLANET_SHIELDED),
+					(int) (planet->radius >> 6),
+					(int) planet->NumPlanets,
+					(unsigned) planet->rand_seed);
+		for (j = 0, planet = &state.PlanetDesc[0];
+				j < state.SunDesc[0].NumPlanets; ++j, ++planet)
+		{	// surface content: scan-seed chain + every generated node
+			DWORD s0, s1, s2;
+			COUNT bio, min, k;
+
+			planet->pPrevDesc = &state.SunDesc[0];
+			if ((planet->data_index & ~PLANET_SHIELDED)
+					>= NUMBER_OF_PLANET_TYPES)
+			{
+				printf ("nodes: star=%d p=%d special=%d\n", (int) i,
+						(int) j, (int) planet->data_index);
+				fflush (stdout);
+				continue;
+			}
+
+			s0 = DoPlanetaryAnalysis (&state.SysInfo, planet);
+			state.SysInfo.PlanetInfo.ScanSeed[BIOLOGICAL_SCAN] = s0;
+			k = (COUNT) ~0;
+			s1 = GenerateLifeForms (&state.SysInfo, &k);
+			bio = k;
+			state.SysInfo.PlanetInfo.ScanSeed[MINERAL_SCAN] = s1;
+			k = (COUNT) ~0;
+			s2 = GenerateMineralDeposits (&state.SysInfo, &k);
+			min = k;
+			state.SysInfo.PlanetInfo.ScanSeed[ENERGY_SCAN] = s2;
+
+			printf ("nodes: star=%d p=%d res=%d map=%dx%d bio=%d min=%d"
+					" seeds=%08x,%08x,%08x"
+					" life=%d", (int) i, (int) j, (int) RESOLUTION_FACTOR,
+					(int) MAP_WIDTH, (int) MAP_HEIGHT,
+					(int) bio, (int) min,
+					(unsigned) s0, (unsigned) s1, (unsigned) s2,
+					(int) state.SysInfo.PlanetInfo.LifeChance);
+			for (k = 0; k < min; ++k)
+			{
+				COUNT node = k;
+
+				(*state.genFuncs->generateMinerals) (&state, planet,
+						&node);
+				printf (" m[%d:%d,%d,%d]", (int) k,
+						(int) state.SysInfo.PlanetInfo.CurPt.x,
+						(int) state.SysInfo.PlanetInfo.CurPt.y,
+						(int) state.SysInfo.PlanetInfo.CurDensity << 16
+						| (int) (state.SysInfo.PlanetInfo.CurType
+						& 0xffff));
+			}
+			for (k = 0; k < bio; ++k)
+			{
+				COUNT node = k;
+
+				(*state.genFuncs->generateLife) (&state, planet, &node);
+				printf (" b[%d:%d,%d,%d]", (int) k,
+						(int) state.SysInfo.PlanetInfo.CurPt.x,
+						(int) state.SysInfo.PlanetInfo.CurPt.y,
+						(int) state.SysInfo.PlanetInfo.CurType);
+			}
+			printf ("\n");
+			fflush (stdout);
+		}
+	}
+}
