@@ -1,3 +1,4 @@
+#include <unistd.h>
 //Copyright Paul Reiche, Fred Ford. 1992-2002
 
 /*
@@ -2671,6 +2672,17 @@ SolarSysMenu (void)
 static BOOLEAN
 DoIpFlight (SOLARSYS_STATE *pSS)
 {
+
+	{	/* dev aid: open the starbase UI on demand (touch /tmp/p6014-starbase) */
+		if (getenv ("P6014_VISIT_STARBASE") != NULL
+				&& access ("/tmp/p6014-starbase", F_OK) == 0)
+		{
+			unlink ("/tmp/p6014-starbase");
+			SET_GAME_STATE (STARBASE_AVAILABLE, 1);
+			SET_GAME_STATE (GLOBAL_FLAGS_AND_DATA, (BYTE) ~0);
+			GLOBAL (CurrentActivity) |= START_ENCOUNTER;
+		}
+	}
 	static TimeCount NextTime;
 	BOOLEAN cancel = PulsedInputState.menu[KEY_MENU_CANCEL];
 

@@ -78,6 +78,11 @@ TFB_PreInit (void)
 		log_add (log_Fatal, "Could not initialize SDL: %s.", SDL_GetError ());
 		exit (EXIT_FAILURE);
 	}
+
+	{	/* dev aid: drive the game over a unix socket (P6014_CONTROL=1) */
+		extern void p6014_control_init (void);
+		p6014_control_init ();
+	}
 }
 
 int
