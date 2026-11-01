@@ -199,6 +199,21 @@ while (--ac > 0)
 		exit (EXIT_SUCCESS);
 	}
 
+	if (getenv ("P6014_STARMAP_DUMP") != NULL)
+	{	// StarmapJS data dump: per-planet bio/mineral values and flags
+		extern void p6014_dump_starmap_data (void);
+		extern STAR_DESC starmap_array[];
+		extern STAR_DESC *star_array;
+		extern const BYTE element_array[];
+		extern const PlanetFrame planet_array[];
+
+		star_array = starmap_array;
+		Elements = element_array;
+		PlanData = planet_array;
+		p6014_dump_starmap_data ();
+		exit (EXIT_SUCCESS);
+	}
+
 	Logo ();
 	
 	GLOBAL (CurrentActivity) = 0;

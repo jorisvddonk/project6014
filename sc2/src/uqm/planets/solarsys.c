@@ -2826,3 +2826,199 @@ p6014_dump_solar_systems (void)
 		}
 	}
 }
+
+/* Development aid: dump the data StarmapJS needs for every star system.
+ *
+ * Extends p6014_dump_solar_systems() with the per-planet values the game
+ * itself computes (mineral value and bio units) and with the special/
+ * shielded/restricted flags, plus moon data. Output is line-oriented:
+ *
+ *   p6014star s=<star> x=<ux> y=<uy> type=<n> color=<n> index=<n> planets=<n>
+ *   p6014body s=<star> p=<planet> m=<moon or -1> di=<data_index>
+ *             type=<planet type> rad=<radius> moons=<n> shield=<0/1>
+ *             restrict=<0/1> bio=<value> min=<value>
+ *
+ * Triggered by P6014_STARMAP_DUMP=1 (see starcon.c); the game exits after.
+ */
+/* calculateBioValue()/calculateMineralValue() live in uqmdebug.c, which is
+ * compiled out in release builds; these are copies for the dump only. */
+static COUNT
+p6014_calc_bio_value (SOLARSYS_STATE *system, PLANET_DESC *world)
+{
+	COUNT result = 0;
+	COUNT numBio;
+	COUNT i;
+
+	system->CurNode = (COUNT) ~0;
+	(*system->genFuncs->generateLife) (system, world,
+			&system->CurNode);
+	numBio = system->CurNode;
+
+	for (i = 0; i < numBio; ++i)
+	{
+		system->CurNode = i;
+		(*system->genFuncs->generateLife) (system, world,
+				&system->CurNode);
+		result += BIO_CREDIT_VALUE * LONIBBLE (CreatureData[
+				system->SysInfo.PlanetInfo.CurType].ValueAndHitPoints);
+	}
+	return result;
+}
+
+static COUNT
+p6014_calc_mineral_value (SOLARSYS_STATE *system, PLANET_DESC *world)
+{
+	COUNT result = 0;
+	COUNT numDeposits;
+	COUNT i;
+
+	system->CurNode = (COUNT) ~0;
+	(*system->genFuncs->generateMinerals) (system, world,
+			&system->CurNode);
+	numDeposits = system->CurNode;
+
+	for (i = 0; i < numDeposits; ++i)
+	{
+		system->CurNode = i;
+		(*system->genFuncs->generateMinerals) (system, world,
+				&system->CurNode);
+		result += HIBYTE (system->SysInfo.PlanetInfo.CurDensity) *
+				GLOBAL (ElementWorth[ElementCategory (
+				system->SysInfo.PlanetInfo.CurType)]);
+	}
+	return result;
+}
+
+static void
+p6014_dump_body (SOLARSYS_STATE *state, COUNT star, COUNT planetNr,
+		int moonNr, PLANET_DESC *body)
+{
+	COUNT type = body->data_index & ~PLANET_SHIELDED;
+	COUNT bio = 0;
+	COUNT min = 0;
+
+	if (moonNr < 0)
+		body->pPrevDesc = &state->SunDesc[0];
+	else
+		body->pPrevDesc = &state->PlanetDesc[planetNr];
+
+	if (type < NUMBER_OF_PLANET_TYPES)
+	{
+		DWORD s0, s1, s2;
+		COUNT count;
+
+		s0 = DoPlanetaryAnalysis (&state->SysInfo, body);
+		state->SysInfo.PlanetInfo.ScanSeed[BIOLOGICAL_SCAN] = s0;
+		count = (COUNT) ~0;
+		s1 = GenerateLifeForms (&state->SysInfo, &count);
+		state->SysInfo.PlanetInfo.ScanSeed[MINERAL_SCAN] = s1;
+		count = (COUNT) ~0;
+		s2 = GenerateMineralDeposits (&state->SysInfo, &count);
+		state->SysInfo.PlanetInfo.ScanSeed[ENERGY_SCAN] = s2;
+
+		state->pOrbitalDesc = body;
+		bio = p6014_calc_bio_value (state, body);
+		min = p6014_calc_mineral_value (state, body);
+	}
+
+	printf ("p6014body s=%d p=%d m=%d di=%d type=%d rad=%d moons=%d"
+			" shield=%d restrict=%d bio=%d min=%d\n",
+			(int) star, (int) planetNr, (int) moonNr,
+			(int) body->data_index, (int) type,
+			(int) (body->radius >> 6), (int) body->NumPlanets,
+			(body->data_index & PLANET_SHIELDED) ? 1 : 0,
+			(body->flags & PLANET_RESTRICTED) ? 1 : 0,
+			(int) bio, (int) min);
+	fflush (stdout);
+}
+
+/* Same setup as GenerateMoons(), but without generateName(): the dump runs
+ * before the game strings are ready, and moons do not need names here. */
+static void
+p6014_generate_moons (SOLARSYS_STATE *system, PLANET_DESC *planet)
+{
+	COUNT i;
+	PLANET_DESC *pMoonDesc;
+	DWORD old_seed;
+
+	old_seed = TFB_SeedRandom (planet->rand_seed);
+
+	for (i = 0, pMoonDesc = &system->MoonDesc[0];
+			i < MAX_MOONS; ++i, ++pMoonDesc)
+	{
+		pMoonDesc->pPrevDesc = planet;
+		if (i >= planet->NumPlanets)
+			continue;
+
+		pMoonDesc->temp_color = planet->temp_color;
+	}
+
+	(*system->genFuncs->generateMoons) (system, planet);
+
+	TFB_SeedRandom (old_seed);
+}
+
+void
+p6014_dump_starmap_data (void)
+{
+	COUNT i;
+
+	/* calculateMineralValue() uses ElementWorth; the normal game sets these
+	 * in InitGameStructures(), which has not run yet at this point. */
+	GLOBAL (ElementWorth[COMMON]) = 1;
+	GLOBAL (ElementWorth[CORROSIVE]) = 2;
+	GLOBAL (ElementWorth[BASE_METAL]) = 3;
+	GLOBAL (ElementWorth[NOBLE]) = 4;
+	GLOBAL (ElementWorth[RARE_EARTH]) = 5;
+	GLOBAL (ElementWorth[PRECIOUS]) = 6;
+	GLOBAL (ElementWorth[RADIOACTIVE]) = 8;
+	GLOBAL (ElementWorth[EXOTIC]) = 25;
+
+	for (i = 0; i < NUM_SOLAR_SYSTEMS; ++i)
+	{
+		SOLARSYS_STATE state;
+		PLANET_DESC *planet;
+		DWORD old_seed;
+		COUNT j, k;
+
+		memset (&state, 0, sizeof state);
+		pSolarSysState = &state;
+		CurStarDescPtr = &star_array[i];
+		state.genFuncs = getGenerateFunctions (CurStarDescPtr->Index);
+		if (!state.genFuncs)
+			continue;
+
+		state.SunDesc[0].data_index = STAR_TYPE (CurStarDescPtr->Type);
+		/* the SIS position selects the mineral/life regions */
+		GLOBAL_SIS (log_x) = UNIVERSE_TO_LOGX (CurStarDescPtr->star_pt.x);
+		GLOBAL_SIS (log_y) = UNIVERSE_TO_LOGY (CurStarDescPtr->star_pt.y);
+
+		old_seed = seedRandomForSolarSys ();
+		state.SunDesc[0].rand_seed = TFB_Random ();
+		state.genFuncs->generatePlanets (&state);
+		TFB_SeedRandom (old_seed);
+
+		printf ("p6014star s=%d x=%d y=%d type=%d color=%d index=%d"
+				" prefix=%d postfix=%d planets=%d\n",
+				(int) i, (int) CurStarDescPtr->star_pt.x,
+				(int) CurStarDescPtr->star_pt.y,
+				(int) STAR_TYPE (CurStarDescPtr->Type),
+				(int) STAR_COLOR (CurStarDescPtr->Type),
+				(int) CurStarDescPtr->Index,
+				(int) CurStarDescPtr->Prefix,
+				(int) CurStarDescPtr->Postfix,
+				(int) state.SunDesc[0].NumPlanets);
+		fflush (stdout);
+
+		for (j = 0, planet = &state.PlanetDesc[0];
+				j < state.SunDesc[0].NumPlanets; ++j, ++planet)
+		{
+			p6014_dump_body (&state, i, j, -1, planet);
+
+			p6014_generate_moons (&state, planet);
+			for (k = 0; k < planet->NumPlanets && k < MAX_MOONS; ++k)
+				p6014_dump_body (&state, i, j, (int) k,
+						&state.MoonDesc[k]);
+		}
+	}
+}
